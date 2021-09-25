@@ -19,21 +19,21 @@
 #include <ArduinoMCP2515.h>
 #include <ACAN_ESP32.h>
 
-#include "HX711.h"
-#include <LiquidCrystal_PCF8574.h>
 
 /**************************************************************************************
  * NAMESPACE
  **************************************************************************************/
 
 using namespace uavcan::node;
+using namespace uavcan::primitive::scalar;
 
 /**************************************************************************************
  * CONSTANTS
  **************************************************************************************/
 
-static const CanardNodeID UC_ID = 16;
-static const uint8_t UC_NAME[50] = "pl.simle.r5.tensocan";
+#define UC_NAME "pl.simle.r5.temp_i2c"
+
+static const CanardNodeID UC_ID = 17;
 static const uavcan_node_GetInfo_Response_1_0 GET_INFO_DATA = {
     /// uavcan.node.Version.1.0 protocol_version
     {1, 0},
@@ -48,8 +48,8 @@ static const uavcan_node_GetInfo_Response_1_0 GET_INFO_DATA = {
      0x9d, 0x19, 0x51, 0xc3, 0x9a, 0xb9, 0xa8, 0xd1},
     /// saturated uint8[<=50] name
     {
-        "pl.simle.r5.tensocan",
-        strlen("pl.simle.r5.tensocan")
+        UC_NAME,
+        strlen(UC_NAME)
     },
 };
 
@@ -59,17 +59,12 @@ static const int LED_BUILTIN = 2;
 static const gpio_num_t CTX_PIN = GPIO_NUM_4;
 static const gpio_num_t CRX_PIN = GPIO_NUM_5;
 
-static const gpio_num_t LOADCELL_DOUT_PIN = GPIO_NUM_17;
-static const gpio_num_t LOADCELL_SCK_PIN = GPIO_NUM_16;
+static const gpio_num_t TEMP_DOUT_PIN = GPIO_NUM_15;
 
-const float calibration_factor = -68100;
-
+static CanardPortID const TEMP_PORT_ID   = 2137U;
 static CanardPortID const LOADCELL_PORT_ID   = 1337U;
 
-#define COLUMS 20
-#define ROWS   4
 
-#define PAGE   ((COLUMS) * (ROWS))
 
 /**************************************************************************************
  * FUNCTION DECLARATION
@@ -78,6 +73,8 @@ static CanardPortID const LOADCELL_PORT_ID   = 1337U;
 bool transmitCanFrame(CanardFrame const &);
 void onReceiveCanFrame(CANMessage const &);
 void onGetInfo_1_0_Request_Received(CanardTransfer const &, ArduinoUAVCAN &);
+void onLoadcell_1_0_Received(CanardTransfer const &, ArduinoUAVCAN &);
+
 
 
 void print_ESP_chip_info();
@@ -90,11 +87,8 @@ void print_ESP_CAN_info(ACAN_ESP32_Settings &settings);
 ArduinoUAVCAN uc(UC_ID, transmitCanFrame);
 
 Heartbeat_1_0<> hb;
-uavcan::primitive::scalar::Real32_1_0<LOADCELL_PORT_ID> scale_measurment;
-
-HX711 scale;
-
-LiquidCrystal_PCF8574 lcd(0x27); // set the LCD address to 0x27 for a 16 chars and 2 line display
+Real32_1_0<LOADCELL_PORT_ID> weight_measurment;
+Real32_1_0<TEMP_PORT_ID> temperature_measurment;
 
 static uint32_t gBlinkLedDate = 0;
 static uint32_t gReceivedFrameCount = 0;
@@ -118,20 +112,6 @@ void setup()
   {
   }
 
-  Wire.begin();
-  Wire.beginTransmission(0x27);
-  error = Wire.endTransmission();
-  Serial.print("Error: ");
-  Serial.print(error);
-
-  if (error == 0) {
-    Serial.println(": LCD found.");
-    show = 0;
-    lcd.begin(16, 2); // initialize the lcd
-
-  } else {
-    Serial.println(": LCD not found.");
-  } // if
 
   print_ESP_chip_info();
 
@@ -152,11 +132,6 @@ void setup()
     Serial.println(errorCode, HEX);
   }
 
-  /* Configure scale */
-  scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
-  scale.set_scale(calibration_factor);
-  scale.tare();
-
   /* Configure initial heartbeat */
   hb.data.uptime = 0;
   hb = Heartbeat_1_0<>::Health::NOMINAL;
@@ -164,6 +139,7 @@ void setup()
   hb.data.vendor_specific_status_code = 0;
 
   uc.subscribe<GetInfo_1_0::Request<>>(onGetInfo_1_0_Request_Received);
+  uc.subscribe<Real32_1_0<LOADCELL_PORT_ID>>(onLoadcell_1_0_Received);
 }
 
 void loop()
@@ -171,34 +147,21 @@ void loop()
   /* Update the heartbeat object */
   hb.data.uptime = millis() / 1000;
   hb = Heartbeat_1_0<>::Mode::OPERATIONAL;
+  CANMessage frame;
 
   /* Publish the heartbeat once/second */
   static unsigned long prev = 0;
   unsigned long const now = millis();
   if (now - prev > 1000)
   {
-    scale_measurment.data.value = scale.get_units(10);
+    // weight_measurment.data.value = scale.get_units(10);
     uc.publish(hb);
-    uc.publish(scale_measurment);
+    // uc.publish(weight_measurment);
     prev = now;
 
-    Serial.print("one reading:\t");
-    Serial.print(scale.get_units(), 1);
-    Serial.print("\t| average:\t");
-    Serial.println(scale.get_units(10), 1);
-  }
-
-  /* Transmit all enqeued CAN frames */
-  while (uc.transmitCanFrame())
-  {
-  }
-
-  CANMessage frame;
-  if (gBlinkLedDate < millis())
-  {
-    gBlinkLedDate += 500;
     digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
-    Serial.print("Sent: ");
+    Serial.print(UC_NAME);
+    Serial.print(" Sent: ");
     Serial.print(gSentFrameCount);
     Serial.print("\t");
     Serial.print("Receive: ");
@@ -211,21 +174,15 @@ void loop()
     Serial.print(" TXERR ");
     Serial.println(CAN_TX_ECR);
   }
+    /* Transmit all enqeued CAN frames */
+  while (uc.transmitCanFrame())
+  {
+  }
+
   while (ACAN_ESP32::can.receive(frame))
   {
     onReceiveCanFrame(frame);
     gReceivedFrameCount += 1;
-  }
-
-  for (uint8_t i = 0; i < 256; i++)
-  {
-    if ((i != 0) && (i % PAGE == 0))
-    {
-      delay(10000);
-      lcd.clear();
-    }
-
-    lcd.write(i);
   }
 }
 
@@ -250,8 +207,8 @@ bool transmitCanFrame(CanardFrame const &frame)
   
   frame2.len = static_cast<uint8_t const>(frame.payload_size);
 
-  Serial.print("TX ");
-  Serial.println(frame2.id);
+  // Serial.print("TX ");
+  // Serial.println(frame2.id);
   const bool ok = ACAN_ESP32::can.tryToSend(frame2);
   if (ok)
   {
@@ -269,9 +226,15 @@ void onReceiveCanFrame(CANMessage const &frame)
       static_cast<uint8_t const>(frame.len),     /* payload_size    */
       reinterpret_cast<const void *>(frame.data) /* payload         */
     };
-  Serial.print("RX ");
-  Serial.println(frame.id);
+  // Serial.print("RX ");
+  // Serial.println(frame.id);
   uc.onCanFrameReceived(f);
+}
+
+void onLoadcell_1_0_Received(CanardTransfer const & transfer, ArduinoUAVCAN & uc) {
+  Real32_1_0<LOADCELL_PORT_ID> const d = Real32_1_0<LOADCELL_PORT_ID>::deserialize(transfer);
+  weight_measurment = d;
+  Serial.println(weight_measurment.data.value);
 }
 
 void onGetInfo_1_0_Request_Received(CanardTransfer const & transfer, ArduinoUAVCAN & uc)
