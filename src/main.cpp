@@ -55,7 +55,7 @@ static const uavcan_node_GetInfo_Response_1_0 GET_INFO_DATA = {
     },
 };
 
-static const uint32_t DESIRED_BIT_RATE = 1000UL * 1000UL; // 1 Mb/s
+static const uint32_t DESIRED_BIT_RATE = 125UL * 1000UL; // 1 kb/s
 static const int LED_BUILTIN = 2;
 
 static const gpio_num_t CTX_PIN = GPIO_NUM_4;
@@ -90,10 +90,9 @@ void print_ESP_CAN_info(ACAN_ESP32_Settings &settings);
 ArduinoUAVCAN uc(UC_ID, transmitCanFrame);
 
 Heartbeat_1_0<> hb;
-Real32_1_0<LOADCELL_PORT_ID> weight_measurment;
+Real32_1_0<LOADCELL_PORT_ID> scale_measurment;
 Real32_1_0<TEMP_PORT_ID> temperature_measurment;
 
-static uint32_t gBlinkLedDate = 0;
 static uint32_t gReceivedFrameCount = 0;
 static uint32_t gSentFrameCount = 0;
 
@@ -176,7 +175,7 @@ void loop()
   /* Publish the heartbeat once/second */
   static unsigned long prev = 0;
   unsigned long const now = millis();
-  if (now - prev > 1000)
+  if (now - prev >= 1000)
   {
     get_temp(insideThermometer);
     uc.publish(hb);
@@ -184,6 +183,8 @@ void loop()
     prev = now;
 
     digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
+    Serial.print(now);
+    Serial.print(" ");
     Serial.print(UC_NAME);
     Serial.print(" Sent: ");
     Serial.print(gSentFrameCount);
@@ -278,8 +279,8 @@ void onReceiveCanFrame(CANMessage const &frame)
 
 void onLoadcell_1_0_Received(CanardTransfer const & transfer, ArduinoUAVCAN & uc) {
   Real32_1_0<LOADCELL_PORT_ID> const d = Real32_1_0<LOADCELL_PORT_ID>::deserialize(transfer);
-  weight_measurment = d;
-  Serial.println(weight_measurment.data.value);
+  scale_measurment = d;
+  Serial.println(scale_measurment.data.value);
 }
 
 void onGetInfo_1_0_Request_Received(CanardTransfer const & transfer, ArduinoUAVCAN & uc)
