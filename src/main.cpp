@@ -19,6 +19,8 @@
 #include <ArduinoMCP2515.h>
 #include <ACAN_ESP32.h>
 
+#include <OneWire.h>
+#include <DallasTemperature.h>
 
 /**************************************************************************************
  * NAMESPACE
@@ -59,7 +61,7 @@ static const int LED_BUILTIN = 2;
 static const gpio_num_t CTX_PIN = GPIO_NUM_4;
 static const gpio_num_t CRX_PIN = GPIO_NUM_5;
 
-static const gpio_num_t TEMP_DOUT_PIN = GPIO_NUM_15;
+static const gpio_num_t TEMP_ONE_WIRE_PIN = GPIO_NUM_15;
 
 static CanardPortID const TEMP_PORT_ID   = 2137U;
 static CanardPortID const LOADCELL_PORT_ID   = 1337U;
@@ -76,6 +78,7 @@ void onGetInfo_1_0_Request_Received(CanardTransfer const &, ArduinoUAVCAN &);
 void onLoadcell_1_0_Received(CanardTransfer const &, ArduinoUAVCAN &);
 
 
+void get_temp(DeviceAddress dev);
 
 void print_ESP_chip_info();
 void print_ESP_CAN_info(ACAN_ESP32_Settings &settings);
@@ -94,7 +97,9 @@ static uint32_t gBlinkLedDate = 0;
 static uint32_t gReceivedFrameCount = 0;
 static uint32_t gSentFrameCount = 0;
 
-int show = -1;
+OneWire oneWire(TEMP_ONE_WIRE_PIN);
+DallasTemperature sensors(&oneWire);
+DeviceAddress insideThermometer;
 
 /**************************************************************************************
  * SETUP/LOOP
@@ -132,6 +137,25 @@ void setup()
     Serial.println(errorCode, HEX);
   }
 
+    // locate devices on the bus
+  Serial.print("Locating devices...");
+  sensors.begin();
+  Serial.print("Found ");
+  Serial.print(sensors.getDeviceCount(), DEC);
+  Serial.println(" devices.");
+  if (!sensors.getAddress(insideThermometer, 0)) Serial.println("Unable to find address for Device 0"); 
+  
+  Serial.print("Device 0 Address: ");
+  printAddress(insideThermometer);
+  Serial.println();
+
+  // set the resolution to 9 bit (Each Dallas/Maxim device is capable of several different resolutions)
+  sensors.setResolution(insideThermometer, 9);
+ 
+  Serial.print("Device 0 Resolution: ");
+  Serial.print(sensors.getResolution(insideThermometer), DEC); 
+  Serial.println();
+
   /* Configure initial heartbeat */
   hb.data.uptime = 0;
   hb = Heartbeat_1_0<>::Health::NOMINAL;
@@ -154,9 +178,9 @@ void loop()
   unsigned long const now = millis();
   if (now - prev > 1000)
   {
-    // weight_measurment.data.value = scale.get_units(10);
+    get_temp(insideThermometer);
     uc.publish(hb);
-    // uc.publish(weight_measurment);
+    uc.publish(temperature_measurment);
     prev = now;
 
     digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
@@ -190,6 +214,27 @@ void loop()
  * FUNCTION DEFINITION
  **************************************************************************************/
 
+// function to print the temperature for a device
+void get_temp(DeviceAddress deviceAddress)
+{
+  sensors.requestTemperatures(); // Send the command to get temperatures
+  // method 1 - slower
+  //Serial.print("Temp C: ");
+  //Serial.print(sensors.getTempC(deviceAddress));
+  //Serial.print(" Temp F: ");
+  //Serial.print(sensors.getTempF(deviceAddress)); // Makes a second call to getTempC and then converts to Fahrenheit
+
+  // method 2 - faster
+  float tempC = sensors.getTempC(deviceAddress);
+  if(tempC == DEVICE_DISCONNECTED_C) 
+  {
+    Serial.println("Error: Could not read temperature data");
+    return;
+  }
+  temperature_measurment.data.value = tempC;
+  Serial.print("Temp C: ");
+  Serial.println(tempC);
+}
 
 bool transmitCanFrame(CanardFrame const &frame)
 {
