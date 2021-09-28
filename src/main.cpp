@@ -77,6 +77,7 @@ void onReceiveCanFrame(CANMessage const &);
 void onGetInfo_1_0_Request_Received(CanardTransfer const &, ArduinoUAVCAN &);
 void onLoadcell_1_0_Received(CanardTransfer const &, ArduinoUAVCAN &);
 
+void on_i2c_request();
 
 void get_temp(DeviceAddress dev);
 
@@ -107,6 +108,9 @@ DeviceAddress insideThermometer;
 void setup()
 {
   int error;
+
+  Wire.begin(8);
+  Wire.onRequest(on_i2c_request);
   //--- Switch on builtin led
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, HIGH);
@@ -214,6 +218,15 @@ void loop()
 /**************************************************************************************
  * FUNCTION DEFINITION
  **************************************************************************************/
+
+void on_i2c_request() {
+  Serial.println("i2c");
+  float vec[2] = {
+    (float) temperature_measurment.data.value, 
+    (float) temperature_measurment.data.value // TODO: second measure
+  };
+  Wire.write((uint8_t*) vec, sizeof(vec));
+}
 
 // function to print the temperature for a device
 void get_temp(DeviceAddress deviceAddress)
