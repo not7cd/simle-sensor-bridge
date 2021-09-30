@@ -59,7 +59,11 @@ static int const TEMP_ONE_WIRE_PIN = A3;
 
 static CanardPortID const TEMP_A_PORT_ID   = 2137U;
 static CanardPortID const TEMP_B_PORT_ID   = 2138U;
+
+// external
 static CanardPortID const LOADCELL_PORT_ID   = 1337U;
+static CanardPortID const DHT_T_PORT_ID   = 1338U;
+static CanardPortID const DHT_H_PORT_ID   = 1339U;
 
 static int const TEMPERATURE_PRECISION = 12;
 
@@ -78,6 +82,7 @@ void    onReceiveBufferFull(CanardFrame const &);
 
 void onGetInfo_1_0_Request_Received(CanardTransfer const &, ArduinoUAVCAN &);
 void onLoadcell_1_0_Received(CanardTransfer const &, ArduinoUAVCAN &);
+void onTempOutside_1_0_Received(CanardTransfer const &, ArduinoUAVCAN &);
 
 void on_i2c_request();
 
@@ -109,6 +114,7 @@ ArduinoUAVCAN uc(UC_ID, transmitCanFrame);
 
 Heartbeat_1_0<> hb;
 Real32_1_0<LOADCELL_PORT_ID> scale_measurment;
+Real32_1_0<DHT_T_PORT_ID> tempOutside;
 //TODO: refactor to list
 Real32_1_0<TEMP_A_PORT_ID> tempAbove;
 Real32_1_0<TEMP_B_PORT_ID> tempBelow;
@@ -189,6 +195,7 @@ void setup()
 
   uc.subscribe<GetInfo_1_0::Request<>>(onGetInfo_1_0_Request_Received);
   uc.subscribe<Real32_1_0<LOADCELL_PORT_ID>>(onLoadcell_1_0_Received);
+  uc.subscribe<Real32_1_0<DHT_T_PORT_ID>>(onTempOutside_1_0_Received);
 }
 
 void loop()
@@ -231,9 +238,11 @@ void loop()
 
 void on_i2c_request() {
   Serial.print(".");
-  float vec[2] = {
+  float vec[4] = {
     (float) tempAbove.data.value, 
-    (float) tempBelow.data.value
+    (float) tempBelow.data.value,
+    (float) tempOutside.data.value,
+    (float) scale_measurment.data.value
   };
   Wire.write((uint8_t*) vec, sizeof(vec));
 }
@@ -307,6 +316,12 @@ void onLoadcell_1_0_Received(CanardTransfer const & transfer, ArduinoUAVCAN & uc
   Real32_1_0<LOADCELL_PORT_ID> const d = Real32_1_0<LOADCELL_PORT_ID>::deserialize(transfer);
   scale_measurment = d;
   Serial.println(scale_measurment.data.value);
+}
+
+void onTempOutside_1_0_Received(CanardTransfer const & transfer, ArduinoUAVCAN & uc) {
+  Real32_1_0<DHT_T_PORT_ID> const d = Real32_1_0<DHT_T_PORT_ID>::deserialize(transfer);
+  tempOutside = d;
+  Serial.println(tempOutside.data.value);
 }
 
 void onGetInfo_1_0_Request_Received(CanardTransfer const & transfer, ArduinoUAVCAN & uc)
