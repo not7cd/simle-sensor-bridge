@@ -16,6 +16,8 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 
+#include "rocketStates.h"
+
 /**************************************************************************************
  * NAMESPACE
  **************************************************************************************/
@@ -59,6 +61,7 @@ static int const TEMP_ONE_WIRE_PIN = A3;
 
 static CanardPortID const TEMP_A_PORT_ID   = 2137U;
 static CanardPortID const TEMP_B_PORT_ID   = 2138U;
+static CanardPortID const ROCKET_STATE_PORT_ID   = 2139U;
 
 // external
 static CanardPortID const LOADCELL_PORT_ID   = 1337U;
@@ -84,7 +87,8 @@ void onGetInfo_1_0_Request_Received(CanardTransfer const &, ArduinoUAVCAN &);
 void onLoadcell_1_0_Received(CanardTransfer const &, ArduinoUAVCAN &);
 void onTempOutside_1_0_Received(CanardTransfer const &, ArduinoUAVCAN &);
 
-void on_i2c_request();
+void onWireRequest();
+void onWireReceive(int n);
 
 void get_temp();
 
@@ -118,6 +122,7 @@ Real32_1_0<DHT_T_PORT_ID> tempOutside;
 //TODO: refactor to list
 Real32_1_0<TEMP_A_PORT_ID> tempAbove;
 Real32_1_0<TEMP_B_PORT_ID> tempBelow;
+Bit_1_0<ROCKET_STATE_PORT_ID> rocketState;
 
 static uint32_t gReceivedFrameCount = 0;
 static uint32_t gSentFrameCount = 0;
@@ -136,7 +141,8 @@ void setup()
   
  
   Wire.begin(8);
-  Wire.onRequest(on_i2c_request);
+  Wire.onRequest(onWireRequest);
+  Wire.onReceive(onWireReceive);
   //--- Switch on builtin led
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, HIGH);
@@ -161,7 +167,6 @@ void setup()
 
     // locate devices on the bus
   Serial.print("Locating devices...");
-   delay(4000);
   sensors.begin();
   Serial.print("Found ");
   Serial.print(sensors.getDeviceCount(), DEC);
@@ -212,6 +217,7 @@ void loop()
     get_temp();
     uc.publish(hb);
     uc.publish(tempAbove);
+    uc.publish(rocketState);
     prev = now;
 
     digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
@@ -236,7 +242,7 @@ void loop()
  * FUNCTION DEFINITION
  **************************************************************************************/
 
-void on_i2c_request() {
+void onWireRequest() {
   Serial.print(".");
   float vec[4] = {
     (float) tempAbove.data.value, 
@@ -245,6 +251,18 @@ void on_i2c_request() {
     (float) scale_measurment.data.value
   };
   Wire.write((uint8_t*) vec, sizeof(vec));
+}
+
+void onWireReceive(int n)
+{ 
+  if(Wire.available()) {
+    uint8_t x = Wire.read();    // receive byte as an integer
+    rocketState.data.value = CHECK_BIT(x, ROCKET_STATUS_ARMED);
+    Serial.print("Armed: 0x");
+    Serial.print(rocketState.data.value);
+    Serial.print("State 0x");
+    Serial.println(x, HEX);         // print the integer
+  }
 }
 
 // function to print the temperature for a device
